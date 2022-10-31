@@ -1,0 +1,238 @@
+---
+title: "Hw2"
+author: "Peter Chu"
+date: '2022-10-31'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidymodels)
+library(ISLR)
+library(ISLR2)
+library(tidyverse)
+library(poissonreg)
+library(corrplot)
+library(discrim)
+library(klaR)
+library(dplyr)
+library(corrr)
+library(pROC)
+tidymodels_prefer()
+setwd("C:/Users/pchu1/OneDrive/Desktop/231/hw3")
+```
+
+Question 1
+
+```{r}
+
+data <- read_csv('titanic.csv')
+data$survived <- factor(data$survived, ordered = TRUE)
+data$pclass <- factor(data$pclass)
+
+set.seed(100)
+
+data_split <- initial_split(data, strata = survived, prop = 0.7)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+data_split
+dim(data_train)
+dim(data_test)
+
+data_train
+
+#number of cols and rows match
+```
+
+The training and testing data sets have the appropriate number of observations. The issues with the training data is that there are a lot of missing values. Furthermore, many of the observations have missing data in areas where others have them, but then have missing data in other areas. 
+
+Stratified sampling is a good idea for this data as it allows us to capture the huge number of observations with a single sample that best represents the entire population. 
+
+Question 2
+
+```{r}
+
+plot(data_train$survived)
+
+plot(data_train$fare~data_train$survived)
+```
+
+On average more people did not survive. The boxplot also shows that on average, those that had a higher fare ended up surviving. This could lead a lot of conclusions, but I don't think we can claim any of them as certain. 
+
+Question 3
+
+```{r}
+
+cor_data <- data %>%
+  select(-survived) %>%
+  correlate()
+
+cor_data %>%
+  stretch() %>%
+  ggplot(aes(x,y, fill = r)) + geom_tile() + geom_text(aes(label = as.character(fashion(r))))
+
+
+```
+
+A lot of the variables are weakly correlated, but some are decently correlated. For example, pclass and age have a correlation of 0.37 is the negative direction. Similaryly, sib_sp and parch have a correlation of 0.41 in the positive direction. pclass and fare have the highest correlation at -0.55. 
+
+Question 4
+
+```{r}
+
+data_train_recipe <- recipe(survived~pclass + sex + age + sib_sp + parch + fare, data = data_train) %>%
+  step_impute_linear('age') %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_interact(terms = ~ starts_with('sex'):fare) %>%
+  step_interact(terms = ~ starts_with('age'):fare)
+
+data_train_recipe
+
+```
+
+Question 5
+
+```{r}
+
+log_reg <- logistic_reg() %>%
+  set_engine('glm') %>%
+  set_mode("classification")
+
+log_wflow <- workflow() %>%
+  add_model(log_reg) %>%
+  add_recipe(data_train_recipe)
+
+log_fit <- fit(log_wflow, data_train)
+
+log_fit %>%
+  tidy()
+
+```
+
+Question 6
+
+```{r}
+
+lda_mod <- discrim_linear() %>%
+  set_mode('classification') %>%
+  set_engine('MASS')
+
+lda_wflow <- workflow() %>%
+  add_model(lda_mod) %>%
+  add_recipe(data_train_recipe)
+
+lda_fit <- fit(lda_wflow, data_train)
+
+lda_fit
+
+```
+
+Question 7
+
+```{r}
+
+qda_model <- discrim_quad() %>%
+  set_mode('classification') %>%
+  set_engine('MASS')
+
+qda_wflow <- workflow() %>%
+  add_model(qda_model) %>%
+  add_recipe(data_train_recipe)
+
+qda_fit <- fit(qda_wflow, data_train)
+
+qda_fit
+
+```
+
+Question 8
+
+```{r}
+
+nb_mod <- naive_Bayes() %>%
+  set_mode('classification') %>%
+  set_engine('klaR') %>%
+  set_args(usekernel = FALSE)
+
+nb_wflow <- workflow() %>%
+  add_model(nb_mod) %>%
+  add_recipe(data_train_recipe)
+
+nb_fit <- fit(nb_wflow, data_train)
+
+```
+
+Question 9
+
+```{r, warning=FALSE}
+
+options(pillar.sigfig = 1)
+pred1 <- predict(log_fit, new_data = data_train, type = 'prob')
+pred2 <- predict(lda_fit, new_data = data_train, type = 'prob')
+pred3 <- predict(qda_fit, new_data = data_train, type = 'prob')
+pred4 <- predict(nb_fit, new_data = data_train, type = 'prob')
+full_data_pred <- bind_cols(pred1, pred2, pred3, pred4, data_train %>% select(survived))
+
+full_data_pred
+
+log_acc <- augment(log_fit, new_data = data_train) %>%
+  accuracy(truth = as.factor(data_train$survived), estimate = .pred_class)
+
+lda_acc <- augment(lda_fit, new_data = data_train) %>%
+  accuracy(truth = as.factor(data_train$survived), estimate = .pred_class)
+
+qda_acc <- augment(qda_fit, new_data = data_train) %>%
+  accuracy(truth = as.factor(data_train$survived), estimate = .pred_class)
+
+nb_acc <- augment(nb_fit, new_data = data_train) %>%
+  accuracy(truth = as.factor(data_train$survived), estimate = .pred_class)
+
+accuracies <- c(log_acc$.estimate, lda_acc$.estimate, qda_acc$.estimate, nb_acc$.estimate)
+
+models <- c("Logisitc Regression", "LDA", "Naive Bayes", "QDA")
+
+results <- tibble(accuracies = accuracies, models = models)
+results %>% 
+  arrange(-accuracies)
+
+```
+
+The logistic regression had the highest accuracy on the training data
+
+Question 10
+
+```{r}
+
+prediction <- predict(log_fit, new_data = data_test, type = 'prob')
+
+accuracy_mod <- augment(log_fit, new_data = data_test) %>%
+  accuracy(truth = as.factor(survived), estimate = .pred_class)
+
+accuracy_mod$.estimate
+
+augment(log_fit, new_data = data_test) %>%
+  conf_mat(truth = survived, estimate = .pred_class) %>%
+  autoplot(type = 'heatmap')
+
+augment(log_fit, new_data = data_test) %>%
+  roc_curve(survived, .pred_Yes) %>%
+  autoplot()
+
+roc(data_test$survived,predictor =(factor(prediction$.pred_Yes, ordered = TRUE)))
+```
+
+The model performed well. It even performed better on the test data than the training data. This may be caused by our random sampling, but overall the accuracy is similar and higher than the other forms of regression we used. The AUC is 0.879.
+
+Question 11
+
+We have $p(z) = ln(\frac{e^z}{1-e^z}) \rightarrow p(1+e^z) = e^z \rightarrow p*1 + p * e^z = e^z \rightarrow p = e^z - p e^z \rightarrow e^z(1 - p) =  p \rightarrow e^z = \frac{p}{1-p} \rightarrow z(p) = log_e(\frac{p}{1-p}) \rightarrow z(p) = ln(\frac{p}{1-p})$
+
+Question 12
+
+Increasing $x_1$ by 2 units would change the odds of the outcome by $e^{2\beta_1}$
+We have $\frac{Pr(Y = 1 | x)}{1 - Pr(Y = 1 | x)} = e^{\beta_0+\beta_1x}$ So increasing x by 2 would lead to  $\frac{Pr(Y = 1 | x)}{1 - Pr(Y = 1 | x)} = e^{\beta_0+\beta_1 (x+2)} = e^{\beta_0} * e^{\beta_1x} * e^{2\beta_1} = e^{\beta_0 + \beta_1x} * e^{2\beta_1}$ which shows that an increase in x by 2 would lead to a factor of $e^{2\beta_1}$ 
+
+If we assume that $\beta_1$ is now negative, then as $x_1 \rightarrow \infty$ we have $- \beta_1 * \infty = - \infty$ so $p \rightarrow - \infty$. If $x_1 \rightarrow - \infty$ then we have $- \beta_1 * - \infty = \infty$ so $p \rightarrow \infty$
+
